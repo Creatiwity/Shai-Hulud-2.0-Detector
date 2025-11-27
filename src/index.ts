@@ -28,11 +28,28 @@ import type { Inputs, ScanSummary } from "./types";
 // updates, and forensic analysis of affected systems.
 // =============================================================================
 
+
+/**
+ * Detect whether the current process is executing inside a GitHub Actions runner.
+ * Uses the conventional environment variable GITHUB_ACTIONS exposed by the platform.
+ * @returns true if running in GitHub Actions, otherwise false.
+ */
 function isRunningInGithubActions(): boolean {
 	return process.env.GITHUB_ACTIONS === "true";
 }
 
-// Get inputs from either GitHub Actions or CLI arguments
+/**
+ * Resolve final user inputs combining (in priority order): explicit GitHub Action inputs,
+ * CLI arguments, environment variables (INPUT_*), and built-in defaults. This allows
+ * the same code path to support both Action execution and local/CI CLI usage seamlessly.
+ *
+ * Validation:
+ * - Boolean inputs: empty Action inputs fall back to provided defaults
+ * - output-format: coerces to one of 'text' | 'json' | 'sarif', defaulting to 'json'
+ *
+ * @param inputs Pre-populated inputs gathered from CLI flags and env vars.
+ * @returns A fully populated and normalized Inputs object ready for scanning.
+ */
 function getInputs(inputs: Inputs): Inputs {
 	const inActions = isRunningInGithubActions();
 
@@ -97,6 +114,18 @@ function getInputs(inputs: Inputs): Inputs {
 	};
 }
 
+/**
+ * Main entrypoint: parses CLI flags / env vars, normalizes inputs, executes the scan,
+ * renders output (text | json | sarif), sets GitHub Action outputs & annotations,
+ * determines failure conditions based on severity policy, and writes a job summary.
+ *
+ * Failure policy precedence (first match wins):
+ * 1. fail-on-any
+ * 2. fail-on-critical
+ * 3. fail-on-high
+ *
+ * All exceptions are caught and converted to a failed Action.
+ */
 async function run(): Promise<void> {
 	try {
 		const parseBoolEnv = (val: string | undefined): boolean | undefined => {
@@ -337,6 +366,13 @@ async function run(): Promise<void> {
 	}
 }
 
+/**
+ * Generate a rich Markdown job summary for GitHub Actions showing compromised packages,
+ * grouped security findings with collapsible detail sections, and recommended immediate
+ * remediation steps. Only written when issues are detected.
+ *
+ * @param summary Aggregate scan results produced by runScan.
+ */
 async function createJobSummary(summary: ScanSummary): Promise<void> {
 	const lines: string[] = [];
     const hasIssues = summary.affectedCount > 0 || summary.securityFindings.length > 0;
@@ -391,7 +427,10 @@ async function createJobSummary(summary: ScanSummary): Promise<void> {
 			if (!findingTypes.has(finding.type)) {
 				findingTypes.set(finding.type, []);
 			}
-			findingTypes.get(finding.type)!.push(finding);
+			const list = findingTypes.get(finding.type);
+			if (list) {
+				list.push(finding);
+			}
 		}
 
 		lines.push('### Finding Details');
